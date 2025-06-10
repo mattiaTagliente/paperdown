@@ -23,7 +23,7 @@ def getBibtex(DOI):
 def getPapersInfoFromDOIs(DOI, restrict):
     paper_found = Paper()
     paper_found.DOI = DOI
-
+    
     try:
         paper = get_entity(DOI, EntityType.PUBLICATION, OutputType.JSON)
         if paper is not None and len(paper) > 0:
@@ -42,47 +42,50 @@ def getPapersInfoFromDOIs(DOI, restrict):
 
 # Get paper information from Crossref and return a list of Paper
 def getPapersInfo(papers, scholar_search_link, restrict, scholar_results):
-    papers_return = []
+    """
+    This function is now updated to accept a list of Paper objects and enrich
+    them with metadata from Crossref, rather than expecting a list of dictionaries.
+    """
     num = 1
-    for paper in papers:
-        # while num <= scholar_results:
-        title = paper['title']
-        queries = {'query.bibliographic': title.lower(), 'sort': 'relevance',
-                   "select": "DOI,title,deposited,author,short-container-title"}
-
-        print("Searching paper {} of {} on Crossref...".format(num, len(papers)))
+    for paper_obj in papers:
+        # Use the title from the existing Paper object
+        title = paper_obj.title
+        if not title: continue
+        queries = {'query.bibliographic': title.lower(), 'sort': 'relevance', "select": "DOI,title,deposited,author,short-container-title"}
+        print(f"Searching paper {num} of {len(papers)} on Crossref... ('{title[:40]}...')")
         num += 1
 
         found_timestamp = 0
-        paper_found = Paper(title, paper['link'], scholar_search_link, paper['cites'], paper['link_pdf'], paper['year'],
-                            paper['authors'])
-        while True:
-            try:
-                for el in iterate_publications_as_json(max_results=30, queries=queries):
+        
+        try:
+            for el in iterate_publications_as_json(max_results=30, queries=queries):
+                el_date = 0
+                if "deposited" in el and "timestamp" in el["deposited"]:
+                    el_date = int(el["deposited"]["timestamp"])
 
-                    el_date = 0
-                    if "deposited" in el and "timestamp" in el["deposited"]:
-                        el_date = int(el["deposited"]["timestamp"])
+                # Compare found title with the paper object's title
+                if (paper_obj.DOI is None or el_date > found_timestamp) and "title" in el and similarStrings(
+                        title.lower(), el["title"][0].lower()) > 0.75:
+                    
+                    found_timestamp = el_date
 
-                    if (paper_found.DOI is None or el_date > found_timestamp) and "title" in el and similarStrings(
-                            title.lower(), el["title"][0].lower()) > 0.75:
-                        found_timestamp = el_date
+                    # Enrich the existing paper object instead of creating a new one
+                    if "DOI" in el:
+                        paper_obj.DOI = el["DOI"].strip().lower()
+                    if "short-container-title" in el and len(el["short-container-title"]) > 0:
+                        paper_obj.jurnal = el["short-container-title"][0]
 
-                        if "DOI" in el:
-                            paper_found.DOI = el["DOI"].strip().lower()
-                        if "short-container-title" in el and len(el["short-container-title"]) > 0:
-                            paper_found.jurnal = el["short-container-title"][0]
+                    if (restrict is None or restrict != 1) and paper_obj.DOI:
+                        paper_obj.setBibtex(getBibtex(paper_obj.DOI))
 
-                        if restrict is None or restrict != 1:
-                            paper_found.setBibtex(getBibtex(paper_found.DOI))
+            # Brief pause to respect API rate limits
+            time.sleep(0.5 + random.random()) # Faster sleep time
 
-                break
-            except ConnectionError as e:
-                print("Wait 10 seconds and try again...")
-                time.sleep(10)
+        except ConnectionError as e:
+            print(f"Connection error while searching for '{title}'. Waiting and trying again. Error: {e}")
+            time.sleep(5)
+        except Exception as e:
+            print(f"An unexpected error occurred while searching for '{title}'. Error: {e}")
 
-        papers_return.append(paper_found)
-
-        time.sleep(random.randint(1, 10))
-
-    return papers_return
+    # Return the original list, now enriched with data
+    return papers

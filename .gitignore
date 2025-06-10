@@ -131,3 +131,20 @@ dmypy.json
 #Visual studio settings
 .vs
 .vscode
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+venv/
+.env
+
+# PyPaperBot Advanced specific
+cache/
+config.json
+credentials.txt
+
+# IDE settings
+.vscode/
+.idea/
