@@ -6,7 +6,31 @@ from .Paper import Paper
 import requests
 import time
 import random
+import os
+import json
+import re
 
+CACHE_FILE = os.path.join(os.getcwd(), 'cache', 'crossref_cache.json')
+CACHE_EXPIRATION_SECONDS = 365 * 24 * 60 * 60  # One year
+
+def normalize_title(title):
+    """Creates a consistent key for caching based on the paper title."""
+    if not title:
+        return None
+    return re.sub(r'[\W_]+', '', title.lower())
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, 'r') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+def save_cache(cache_data):
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(cache_data, f, indent=4)
 
 def getBibtex(DOI):
     try:
@@ -21,71 +45,86 @@ def getBibtex(DOI):
 
 
 def getPapersInfoFromDOIs(DOI, restrict):
+    # This function is for single DOI lookups and can largely remain as is.
     paper_found = Paper()
     paper_found.DOI = DOI
-    
     try:
         paper = get_entity(DOI, EntityType.PUBLICATION, OutputType.JSON)
-        if paper is not None and len(paper) > 0:
-            if "title" in paper:
-                paper_found.title = paper["title"][0]
-            if "short-container-title" in paper and len(paper["short-container-title"]) > 0:
-                paper_found.jurnal = paper["short-container-title"][0]
-
-            if restrict is None or restrict != 1:
-                paper_found.setBibtex(getBibtex(paper_found.DOI))
-    except:
+        if paper and "title" in paper:
+            paper_found.title = paper["title"][0]
+        if paper and "short-container-title" in paper and paper["short-container-title"]:
+            paper_found.jurnal = paper["short-container-title"][0]
+        if not restrict or restrict != 1:
+            paper_found.setBibtex(getBibtex(paper_found.DOI))
+    except Exception:
         print("Paper not found " + DOI)
-
     return paper_found
 
 
-# Get paper information from Crossref and return a list of Paper
 def getPapersInfo(papers, scholar_search_link, restrict, scholar_results):
     """
-    This function is now updated to accept a list of Paper objects and enrich
-    them with metadata from Crossref, rather than expecting a list of dictionaries.
+    Enriches Paper objects with metadata from Crossref, using a title-based cache.
     """
-    num = 1
-    for paper_obj in papers:
-        # Use the title from the existing Paper object
-        title = paper_obj.title
-        if not title: continue
-        queries = {'query.bibliographic': title.lower(), 'sort': 'relevance', "select": "DOI,title,deposited,author,short-container-title"}
-        print(f"Searching paper {num} of {len(papers)} on Crossref... ('{title[:40]}...')")
-        num += 1
+    cache = load_cache()
+    
+    for i, paper_obj in enumerate(papers):
+        title_key = normalize_title(paper_obj.title)
+        if not title_key:
+            continue
 
-        found_timestamp = 0
+        print(f"[{i+1}/{len(papers)}] Processing metadata for: '{paper_obj.title[:40]}...'")
+
+        # Check cache using the normalized title
+        if title_key in cache:
+            cached_item = cache[title_key]
+            cache_age = time.time() - cached_item.get('timestamp', 0)
+            if cache_age < CACHE_EXPIRATION_SECONDS:
+                print("    -> Found fresh data in cache.")
+                # Populate paper object from cache
+                paper_obj.DOI = cached_item.get('DOI')
+                paper_obj.jurnal = cached_item.get('jurnal')
+                if (not restrict or restrict != 1) and 'bibtex' in cached_item:
+                    paper_obj.setBibtex(cached_item['bibtex'])
+                continue  # Move to the next paper
+
+        # If not in cache or stale, query the API
+        print("    -> No cache hit, querying Crossref...")
+        queries = {'query.bibliographic': paper_obj.title.lower(), 'sort': 'relevance', "select": "DOI,title,deposited,author,short-container-title"}
         
         try:
-            for el in iterate_publications_as_json(max_results=30, queries=queries):
-                el_date = 0
-                if "deposited" in el and "timestamp" in el["deposited"]:
-                    el_date = int(el["deposited"]["timestamp"])
+            # Find the best match from Crossref
+            best_match = None
+            highest_similarity = 0.75 # Minimum threshold
+            
+            for el in iterate_publications_as_json(max_results=5, queries=queries):
+                if "title" in el:
+                    similarity = similarStrings(paper_obj.title.lower(), el["title"][0].lower())
+                    if similarity > highest_similarity:
+                        highest_similarity = similarity
+                        best_match = el
+            
+            if best_match:
+                paper_obj.DOI = best_match.get("DOI", "").strip().lower()
+                if "short-container-title" in best_match and best_match["short-container-title"]:
+                    paper_obj.jurnal = best_match["short-container-title"][0]
+                
+                if (not restrict or restrict != 1) and paper_obj.DOI:
+                    bibtex = getBibtex(paper_obj.DOI)
+                    paper_obj.setBibtex(bibtex)
+                    # Update cache with the new, validated data
+                    cache[title_key] = {
+                        'timestamp': time.time(),
+                        'DOI': paper_obj.DOI,
+                        'jurnal': paper_obj.jurnal,
+                        'bibtex': bibtex
+                    }
+            else:
+                print("    -> No confident match found on Crossref.")
 
-                # Compare found title with the paper object's title
-                if (paper_obj.DOI is None or el_date > found_timestamp) and "title" in el and similarStrings(
-                        title.lower(), el["title"][0].lower()) > 0.75:
-                    
-                    found_timestamp = el_date
+            time.sleep(0.5 + random.random())
 
-                    # Enrich the existing paper object instead of creating a new one
-                    if "DOI" in el:
-                        paper_obj.DOI = el["DOI"].strip().lower()
-                    if "short-container-title" in el and len(el["short-container-title"]) > 0:
-                        paper_obj.jurnal = el["short-container-title"][0]
-
-                    if (restrict is None or restrict != 1) and paper_obj.DOI:
-                        paper_obj.setBibtex(getBibtex(paper_obj.DOI))
-
-            # Brief pause to respect API rate limits
-            time.sleep(0.5 + random.random()) # Faster sleep time
-
-        except ConnectionError as e:
-            print(f"Connection error while searching for '{title}'. Waiting and trying again. Error: {e}")
-            time.sleep(5)
         except Exception as e:
-            print(f"An unexpected error occurred while searching for '{title}'. Error: {e}")
+            print(f"    An unexpected error occurred while searching Crossref: {e}")
 
-    # Return the original list, now enriched with data
+    save_cache(cache)
     return papers

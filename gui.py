@@ -172,7 +172,12 @@ def initialize_credentials():
         messagebox.showerror("Credentials Error", "Could not find `email` in credentials.txt")
         return False
     UnpywallCredentials(email)
-    cache = UnpywallCache(os.path.join(os.getcwd(), 'cache', 'unpaywall_cache'))
+    
+    # Ensure the main cache directory exists
+    cache_dir = os.path.join(os.getcwd(), 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    cache = UnpywallCache(os.path.join(cache_dir, 'unpaywall_cache'))
     Unpywall.init_cache(cache)
     return True
 
