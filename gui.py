@@ -30,10 +30,11 @@ def load_credentials():
         parser.read('credentials.txt')
         email = parser.get('credentials', 'email', fallback=None)
         s2_key = parser.get('credentials', 's2_api_key', fallback=None)
+        gemini_key = parser.get('credentials', 'gemini_api_key', fallback=None)
         if not email: raise ValueError("Email not found")
-        return email, s2_key
+        return email, s2_key, gemini_key
     except Exception:
-        return None, None
+        return None, None, None
 
 class App:
     def __init__(self, root, config):
@@ -141,7 +142,7 @@ class App:
                 # ... standard search logic ...
                 pass
             else:
-                _, s2_api_key = load_credentials()
+                _, s2_api_key, gemini_api_key = load_credentials()
                 find_relevant_papers(
                     topic=self.topic_entry.get(),
                     start_year=int(self.start_year_entry.get()),
@@ -149,7 +150,8 @@ class App:
                     base_dwn_dir=dwn_dir,
                     num_reviews=int(self.num_reviews_entry.get()),
                     num_non_reviews=int(self.num_non_reviews_entry.get()),
-                    s2_api_key=s2_api_key
+                    s2_api_key=s2_api_key,
+                    gemini_api_key=gemini_api_key
                 )
             messagebox.showinfo('Done!', 'Process finished.')
         except Exception as e:
@@ -167,9 +169,12 @@ class App:
         def flush(self): pass
 
 def initialize_credentials():
-    email, _ = load_credentials()
+    email, _, gemini_key = load_credentials()
     if not email:
         messagebox.showerror("Credentials Error", "Could not find `email` in credentials.txt")
+        return False
+    if not gemini_key:
+        messagebox.showerror("Credentials Error", "Could not find `gemini_api_key` in credentials.txt")
         return False
     UnpywallCredentials(email)
     

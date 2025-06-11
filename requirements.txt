@@ -56,3 +56,4 @@ setuptools==75.2.0
 unpywall
 arxiv
 PySimpleGUI
+google-genai

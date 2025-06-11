@@ -2,17 +2,11 @@
 import requests
 import re
 import html
+import bibtexparser
 
 def strip_xml(text: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     return html.unescape(text).strip()
-
-def insert_abstract(bibtex: str, abs_text: str) -> str:
-    # Cleans up the abstract text for BibTeX
-    abs_text = re.sub(r'\s+', ' ', abs_text).strip()
-    field = f"  abstract = {{{abs_text}}},\n"
-    # Injects the abstract field before the final closing brace
-    return re.sub(r"\n}$", f"\n{field}}}", bibtex, count=1)
 
 def enrich_paper_with_abstract(paper, s2_api_key=None):
     """
@@ -20,18 +14,17 @@ def enrich_paper_with_abstract(paper, s2_api_key=None):
     Tries Semantic Scholar first, then Crossref's JSON API.
     """
     if not paper.bibtex or (paper.bibtex and 'abstract =' in paper.bibtex.lower()):
-        return # Skip if no bibtex or abstract already exists
+        return
 
     print(f"    -> Abstract missing for '{paper.title[:30]}...'. Searching...")
     abstract_txt = None
-    
+
     # Strategy 1: Semantic Scholar API (if key is provided)
-    if s2_api_key:
-        paper_id = ("DOI:" + paper.DOI) if paper.DOI else ("ARXIV:" + paper.scholar_link) # Simplified ID
+    if s2_api_key and paper.DOI:
         try:
             headers = {"x-api-key": s2_api_key}
             s2 = requests.get(
-                f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}",
+                f"https://api.semanticscholar.org/graph/v1/paper/DOI:{paper.DOI}",
                 params={"fields": "abstract"},
                 headers=headers, timeout=10
             )
@@ -40,7 +33,7 @@ def enrich_paper_with_abstract(paper, s2_api_key=None):
                 abstract_txt = js.get("abstract", "").strip() or None
                 if abstract_txt: print("        Found abstract on Semantic Scholar.")
         except Exception:
-            pass # Fail silently and try next method
+            pass
 
     # Strategy 2: Crossref JSON API Fallback
     if not abstract_txt and paper.DOI:
@@ -51,8 +44,20 @@ def enrich_paper_with_abstract(paper, s2_api_key=None):
                 abstract_txt = strip_xml(raw_abs)
                 if abstract_txt: print("        Found abstract on Crossref.")
         except Exception:
-            pass # Fail silently
+            pass
 
-    # Inject the abstract into the bibtex string if found
+    # Inject the abstract into the bibtex string using the bibtexparser library
     if abstract_txt:
-        paper.bibtex = insert_abstract(paper.bibtex, abstract_txt)
+        try:
+            parser = bibtexparser.bparser.BibTexParser(common_strings=True)
+            bib_database = bibtexparser.loads(paper.bibtex, parser=parser)
+            if bib_database.entries:
+                # Add the abstract to the entry
+                bib_database.entries[0]['abstract'] = abstract_txt
+                # Write the updated entry back to the paper.bibtex string
+                writer = bibtexparser.bwriter.BibTexWriter()
+                writer.indent = '    '
+                paper.bibtex = writer.write(bib_database)
+                print("        Successfully added abstract to BibTeX entry.")
+        except Exception as e:
+            print(f"        Warning: Failed to inject abstract into BibTeX. Reason: {e}")
