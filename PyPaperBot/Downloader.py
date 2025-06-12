@@ -9,9 +9,9 @@ import tempfile
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import undetected_chromedriver as uc
-from unpywall import Unpywall  # CORRECTED: Added missing import
+from unpywall import Unpywall
 from .PapersFilters import similarStrings
-from .HTMLparsers import getSchiHubPDF, SciHubUrls
+from .HTMLparsers import getSchiHubPDF, SciHubUrls, get_scidb_pdf_link, scrape_page_for_pdf_link
 from .NetInfo import NetInfo
 from .Utils import URLjoin
 from .GeminiDownloader import download_with_gemini_agent
@@ -19,17 +19,28 @@ import arxiv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- Helper Functions (unchanged) ---
 def setSciHubUrl(session):
+    """
+    Dynamically finds a working Sci-Hub mirror.
+    """
     print("Searching for a sci-hub mirror...")
+    mirrors_url = "https://sci-hub.ee/"
     try:
-        r = session.get(NetInfo.SciHub_URLs_repo, headers=NetInfo.HEADERS, timeout=15)
+        r = session.get(mirrors_url, headers=NetInfo.HEADERS, timeout=15)
         r.raise_for_status()
-        links = SciHubUrls(r.text)
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        # Select links that start with 'https://sci-hub.'
+        links = [a['href'] for a in soup.select('a[href^="https://sci-hub."]')]
+        
         for l in links:
+            # Ensure the link ends correctly
+            if not l.endswith('/'):
+                l += '/'
             try:
-                r = session.get(l, headers=NetInfo.HEADERS, timeout=10, verify=False)
-                if r.status_code == 200:
+                # Test the mirror by checking its title
+                r_test = session.get(l, headers=NetInfo.HEADERS, timeout=10, verify=False)
+                if r_test.status_code == 200 and "Sci-Hub" in r_test.text:
                     NetInfo.SciHub_URL = l
                     print(f"Using Sci-Hub mirror: {l}")
                     return
@@ -37,8 +48,9 @@ def setSciHubUrl(session):
                 continue
     except requests.exceptions.RequestException as e:
         print(f"    Could not fetch Sci-Hub mirrors: {e}")
+    
     print("\nNo working Sci-Hub instance found! Using default.")
-    NetInfo.SciHub_URL = "https://sci-hub.se"
+    NetInfo.SciHub_URL = "https://sci-hub.se/"
 
 
 def getSaveDir(folder, fname):
@@ -76,45 +88,14 @@ def saveFile(file_name, content, paper, dwn_source):
         print(f"    ERROR: Could not save file. Reason: {e}")
         return False
 
-# --- Main Download Functions (Rewritten for Robustness) ---
 def download_with_selenium_agent(url, final_file_path, paper_obj, source_name):
     print(f"    -> Trying browser fallback for {source_name}...")
-    driver = None
-    temp_dir = tempfile.mkdtemp()
-    try:
-        chrome_options = uc.ChromeOptions()
-        prefs = {"download.default_directory": temp_dir, "plugins.always_open_pdf_externally": True}
-        chrome_options.add_experimental_option("prefs", prefs)
-        driver = uc.Chrome(options=chrome_options, headless=False, use_subprocess=True)
-        driver.get(url)
-        time.sleep(5)
-        
-        download_with_gemini_agent(driver, paper_obj)
-        
-        # Wait for download to complete
-        for _ in range(45):
-            files = [f for f in os.listdir(temp_dir) if f.endswith('.pdf') and not f.endswith('.crdownload')]
-            if files:
-                downloaded_file = path.join(temp_dir, files[0])
-                # We need to move the file and then save it to the paper object
-                shutil.move(downloaded_file, final_file_path)
-                with open(final_file_path, 'rb') as f:
-                    content = f.read()
-                return saveFile(final_file_path, content, paper_obj, f"{source_name} (Gemini Agent)")
-            time.sleep(1)
-        print("    Download did not complete in time.")
-        return False
-    except Exception as e:
-        print(f"    Browser fallback download failed. Reason: {e}")
-        return False
-    finally:
-        if driver:
-            driver.quit()
-        if path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+    # This feature is currently disabled due to instability.
+    return False
 
 def downloadPapers(papers, dwnl_dir, num_limit, SciHub_URL=None, SciDB_URL=None, gemini_api_key=None):
     session = requests.Session()
+    session.headers.update(NetInfo.HEADERS) # Use base headers
     NetInfo.gemini_api_key = gemini_api_key
     if not getattr(NetInfo, 'SciHub_URL', None):
         setSciHubUrl(session)
@@ -130,16 +111,43 @@ def downloadPapers(papers, dwnl_dir, num_limit, SciHub_URL=None, SciDB_URL=None,
         print("--> Checking Unpaywall...")
         try:
             if p.DOI:
-                unpaywall_url = Unpaywall.get_doc_link(p.DOI)
+                unpaywall_url = Unpywall.get_doc_link(p.DOI)
                 if unpaywall_url:
-                    r = session.get(unpaywall_url, timeout=30, verify=False)
+                    r = session.get(unpaywall_url, timeout=30, verify=False, allow_redirects=True)
                     if r.ok and 'application/pdf' in r.headers.get('content-type', '').lower():
                         if saveFile(pdf_dir, r.content, p, "Unpaywall"):
                             continue
+                    elif r.ok and 'text/html' in r.headers.get('content-type', '').lower():
+                        print("    -> Unpaywall returned an HTML page, attempting to find PDF link...")
+                        scraped_link = scrape_page_for_pdf_link(r.text, r.url)
+                        if scraped_link:
+                            r_pdf = session.get(scraped_link, timeout=30, verify=False)
+                            if r_pdf.ok and saveFile(pdf_dir, r_pdf.content, p, "Unpaywall (scraped)"):
+                                continue
+                    else:
+                        print(f"    Unpaywall link did not return a valid PDF (Status: {r.status_code}).")
+                else:
+                    print("    No open access URL found on Unpaywall.")
+            else:
+                print("    Paper has no DOI, cannot check Unpaywall.")
         except Exception as e:
-            print(f"    Unpaywall failed. Reason: {type(e).__name__}")
+            print(f"    Unpaywall check failed with an error: {e}")
         
-        # Strategy 2: arXiv
+        # Strategy 2: Direct DOI link
+        if not p.downloaded and p.DOI:
+            print("--> Checking direct DOI link...")
+            try:
+                direct_url = f"https://doi.org/{p.DOI}"
+                r = session.get(direct_url, headers=NetInfo.HEADERS, timeout=30, allow_redirects=True)
+                if r.ok and 'application/pdf' in r.headers.get('content-type', '').lower():
+                    if saveFile(pdf_dir, r.content, p, "Direct DOI"):
+                        continue
+                else:
+                    print(f"    Direct DOI link did not resolve to a PDF (Status: {r.status_code}).")
+            except Exception as e:
+                print(f"    Direct DOI check failed with an error: {e}")
+
+        # Strategy 3: arXiv
         if not p.downloaded:
             print("--> Checking arXiv...")
             try:
@@ -149,21 +157,35 @@ def downloadPapers(papers, dwnl_dir, num_limit, SciHub_URL=None, SciDB_URL=None,
                     if r.ok and 'application/pdf' in r.headers.get('content-type', '').lower():
                         if saveFile(pdf_dir, r.content, p, "arXiv"):
                             continue
+                else:
+                    print("    No matching paper found on arXiv.")
             except Exception as e:
-                print(f"    arXiv failed. Reason: {type(e).__name__}")
+                print(f"    arXiv check failed with an error: {e}")
+        
+        # Strategy 4: Anna's Archive (SciDB)
+        if not p.downloaded and p.DOI:
+            print("--> Checking Anna's Archive...")
+            try:
+                scidb_url = URLjoin(NetInfo.SciDB_URL, p.DOI)
+                r = session.get(scidb_url, headers=NetInfo.HEADERS, timeout=30)
+                if r.ok:
+                    pdf_link = get_scidb_pdf_link(r.text)
+                    if pdf_link:
+                        pdf_response = session.get(pdf_link, timeout=45)
+                        if pdf_response.ok and saveFile(pdf_dir, pdf_response.content, p, "Anna's Archive"):
+                            continue
+                    else:
+                        print("    Could not find PDF link on Anna's Archive page.")
+                else:
+                    print(f"    Could not reach Anna's Archive for this paper (Status: {r.status_code}).")
+            except Exception as e:
+                print(f"    Anna's Archive check failed with an error: {e}")
 
-        # Strategy 3: Publisher (via Gemini Agent)
-        if not p.downloaded:
-            publisher_url = f"https://doi.org/{p.DOI}" if p.DOI else p.scholar_link
-            if publisher_url:
-                if download_with_selenium_agent(publisher_url, pdf_dir, p, "Publisher"):
-                    continue
-
-        # Strategy 4: Sci-Hub
+        # Strategy 5: Sci-Hub
         if not p.downloaded and p.DOI:
             print("--> Checking Sci-Hub...")
             try:
-                scihub_url = URLjoin(getattr(NetInfo, 'SciHub_URL', ''), p.DOI)
+                scihub_url = URLjoin(NetInfo.SciHub_URL, p.DOI)
                 r = session.get(scihub_url, timeout=30, verify=False)
                 if r.ok:
                     pdf_link = getSchiHubPDF(r.text)
@@ -171,5 +193,12 @@ def downloadPapers(papers, dwnl_dir, num_limit, SciHub_URL=None, SciDB_URL=None,
                         pdf_response = session.get(pdf_link, timeout=45, verify=False)
                         if pdf_response.ok and saveFile(pdf_dir, pdf_response.content, p, "Sci-Hub"):
                             continue
+                    else:
+                        print("    Could not find PDF link on Sci-Hub page.")
+                else:
+                     print(f"    Could not reach Sci-Hub for this paper (Status: {r.status_code}).")
             except Exception as e:
-                print(f"    Sci-Hub failed. Reason: {type(e).__name__}")
+                print(f"    Sci-Hub check failed with an error: {e}")
+        
+        if not p.downloaded:
+            print("    Could not download paper from any available source.")

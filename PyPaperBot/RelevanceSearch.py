@@ -4,7 +4,7 @@ import re
 from .Scholar import ScholarPapersInfo
 from .Crossref import getPapersInfo
 from .Downloader import downloadPapers
-from .Paper import generate_custom_bibtex
+from .Paper import generate_custom_bibtex, generate_citekeys
 from .MetadataFetcher import enrich_paper_with_abstract
 
 def find_relevant_papers(
@@ -24,13 +24,13 @@ def find_relevant_papers(
     print(f"Topic: {topic}, Date Range: {start_year}-{end_year}")
 
     # --- Phase 1: Find review papers ---
-    print("\n[Phase 1/5] Searching for review papers...")
+    print("\n[Phase 1/4] Searching for review papers...")
     review_query = f"{topic} review"
     top_reviews = ScholarPapersInfo(review_query, range(1, 2), min_date=start_year, max_date=end_year, fetch_metadata=False)[:num_reviews]
     print(f"Selected top {len(top_reviews)} review papers.")
 
     # --- Phase 2: Find non-review papers ---
-    print("\n[Phase 2/5] Searching for non-review papers...")
+    print("\n[Phase 2/4] Searching for non-review papers...")
     all_papers_query = topic
     pages_to_search = 1 + ((num_non_reviews + len(top_reviews)) // 10)
     all_results = ScholarPapersInfo(all_papers_query, range(1, pages_to_search + 1), min_date=start_year, max_date=end_year, fetch_metadata=False)
@@ -43,28 +43,28 @@ def find_relevant_papers(
         print("No papers found.")
         return
 
-    # --- Phase 3: Fetch Crossref metadata (using cache) ---
-    print("\n[Phase 3/5] Fetching Crossref metadata...")
-    final_paper_list = getPapersInfo(final_paper_list, "RelevanceSearch", None, s2_api_key)
+    # --- Phase 3: Fetch full metadata (Authors, DOI, etc.) ---
+    print("\n[Phase 3/4] Fetching full metadata...")
+    final_paper_list = getPapersInfo(final_paper_list, s2_api_key)
 
-    # --- Phase 4: Enrich all papers with abstracts ---
-    # This now runs as a separate step to ensure it happens for cached and new papers.
-    print("\n[Phase 4/5] Enriching with abstracts...")
-    for paper in final_paper_list:
-        enrich_paper_with_abstract(paper, s2_api_key)
+    # --- Phase 4: Generate Citekeys and Download ---
+    print("\n[Phase 4/4] Generating citekeys and downloading...")
+    final_paper_list = generate_citekeys(final_paper_list)
 
-    # --- Phase 5: Process and download ---
-    print("\n[Phase 5/5] Processing and downloading...")
+    # Add verbose logging for assigned citekeys
+    print("\n--- Final Citekeys Assigned ---")
+    for p in final_paper_list:
+        print(f"  - {p.citekey:<25} | {p.title}")
+    print("-----------------------------\n")
+
     folder_name = re.sub(r'[^\w\-_\. ]', '_', f"{topic.replace(' ', '_')}_{start_year}-{end_year}")
     results_dir = os.path.join(base_dwn_dir, folder_name)
     os.makedirs(results_dir, exist_ok=True)
     print(f"Results will be saved in: {results_dir}")
 
-    # Generate BibTeX file (which now includes abstracts)
     bibtex_path = os.path.join(results_dir, "references.bib")
     generate_custom_bibtex(final_paper_list, bibtex_path)
 
-    # Download papers
     downloadPapers(
         final_paper_list,
         results_dir,

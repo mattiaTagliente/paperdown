@@ -20,7 +20,7 @@ class Paper:
         self.citekey = None # For custom citation key
 
         self.downloaded = False
-        self.downloadedFrom = 0  # 1-SciHub 2-scholar
+        self.downloadedFrom = 0
         
         self.use_doi_as_filename = False
 
@@ -29,7 +29,9 @@ class Paper:
             if self.use_doi_as_filename and self.DOI:
                 return urllib.parse.quote(self.DOI, safe='') + ".pdf"
             else:
-                return re.sub(r'[^\w\-_. ]', '_', self.title) + ".pdf"
+                # Use citekey for filename if available, otherwise title
+                fname = self.citekey if self.citekey else self.title
+                return re.sub(r'[^\w\-_. ]', '_', fname) + ".pdf"
         except:
             return "none.pdf"
 
@@ -54,7 +56,7 @@ class Paper:
 
     @staticmethod
     def generateReport(papers, path):
-        columns = ["Name", "Scholar Link", "DOI", "Bibtex", "PDF Name", "Year", "Journal", "Downloaded", "Downloaded from", "Authors", "Cite Key"]
+        columns = ["Name", "Cite Key", "Scholar Link", "DOI", "Bibtex", "PDF Name", "Year", "Journal", "Downloaded", "Downloaded from", "Authors"]
         data = []
         for p in papers:
             pdf_name = p.getFileName() if p.downloaded else ""
@@ -66,101 +68,85 @@ class Paper:
             elif p.downloadedFrom == 2: dwn_from = "SciHub"
             elif p.downloadedFrom == 3: dwn_from = "Scholar"
             data.append({
-                "Name": p.title, "Scholar Link": p.scholar_link, "DOI": p.DOI,
+                "Name": p.title, "Cite Key": p.citekey, "Scholar Link": p.scholar_link, "DOI": p.DOI,
                 "Bibtex": bibtex_found, "PDF Name": pdf_name, "Year": p.year,
                 "Journal": p.jurnal, "Downloaded": p.downloaded, "Downloaded from": dwn_from,
-                "Authors": p.authors, "Cite Key": p.citekey
+                "Authors": p.authors
             })
         df = pd.DataFrame(data, columns=columns)
         df.to_csv(path, index=False, encoding='utf-8')
 
 # --- New Functionality for Custom BibTeX ---
-def generate_citekey(paper, existing_keys):
-    """Generates a custom BibTeX key in the format [SurnameYEARTitn]."""
-    if not paper.authors: paper.authors = "Unknown"
-    if not paper.year: paper.year = "0000"
-    if not paper.title: paper.title = "NoTitle"
 
-    # 1. Surname
-    try:
-        surname = paper.authors.split(',')[0].split(' ')[-1]
-        surname = re.sub(r'\W+', '', surname) # Remove non-alphanumeric
-    except:
-        surname = "Unknown"
-
-    # 2. YEAR
-    year_str = str(paper.year)
-
-    # 3. Tit
-    title_part = re.sub(r'[\s_]+', '', paper.title)[:3]
-
-    base_key = f"{surname}{year_str}{title_part}"
+def generate_citekeys(papers):
+    """
+    Generates and assigns a unique, robust citekey to each paper in a list
+    based on the [SurnameYEARTitn] format.
+    """
+    key_counts = {}
     
-    # 4. n (Disambiguation)
-    final_key = base_key
-    if base_key not in existing_keys:
-        existing_keys[base_key] = 0
-    else:
-        existing_keys[base_key] += 1
-        # Add 'a', 'b', etc. for disambiguation
-        disambiguation_char = chr(ord('a') + existing_keys[base_key])
-        # Also apply the first disambiguation char to the original entry
-        if existing_keys[base_key] == 1:
-           first_entry_key = f"{base_key}a"
-           final_key = f"{base_key}b"
-           return final_key, base_key # Return both to update the first entry
-        else:
-           final_key = f"{base_key}{disambiguation_char}"
-    
-    return final_key, None
+    # First pass: Generate base keys and count frequencies
+    for p in papers:
+        try:
+            surname = p.authors.split(',')[0].split(' ')[-1]
+            surname = re.sub(r'\W+', '', surname)
+        except (AttributeError, IndexError):
+            surname = "Unknown"
+        
+        year_str = str(p.year) if p.year else "0000"
+        
+        source_str = p.title if p.title else p.jurnal
+        if not source_str: source_str = "NoTitle"
+        
+        # Replace spaces with underscores and take first 3 chars
+        title_part = source_str.replace(" ", "_")[:3]
+
+        base_key = f"{surname}{year_str}{title_part}"
+        p.citekey = base_key # Temporarily assign base key
+        key_counts[base_key] = key_counts.get(base_key, 0) + 1
+
+    # Second pass: Apply disambiguation where needed
+    disambiguation_counters = {}
+    for p in papers:
+        base_key = p.citekey
+        if key_counts.get(base_key, 0) > 1:
+            # This key is a duplicate, so add a disambiguation letter
+            current_count = disambiguation_counters.get(base_key, 0)
+            p.citekey = f"{base_key}{chr(ord('a') + current_count)}"
+            disambiguation_counters[base_key] = current_count + 1
+
+    return papers
 
 
 def generate_custom_bibtex(papers, path):
     """
     Generates a single .bib file for a list of papers with custom keys.
+    This function now assumes papers have their 'citekey' attribute already set.
     """
     print(f"Generating custom BibTeX file at: {path}")
     all_bib_entries = []
-    key_counts = {}
-    paper_key_map = {} # Maps paper index to final key
-
-    # First pass to generate keys and handle disambiguation
-    for i, p in enumerate(papers):
-        if not p.bibtex:
-            print(f"    Skipping paper without BibTeX info: {p.title}")
-            continue
-
-        final_key, original_key_to_update = generate_citekey(p, key_counts)
-
-        if original_key_to_update:
-            # Find the first paper that had this key and update it
-            for j, old_p in enumerate(papers[:i]):
-                if old_p.citekey == original_key_to_update:
-                    paper_key_map[j] = f"{original_key_to_update}a"
-                    break
-        
-        paper_key_map[i] = final_key
-        p.citekey = final_key
-
-    # Second pass to build the bib file with final keys
-    for i, p in enumerate(papers):
+    
+    for p in papers:
         if p.bibtex:
             try:
                 parser = bibtexparser.bparser.BibTexParser(common_strings=True)
                 bib_database = bibtexparser.loads(p.bibtex, parser=parser)
                 if bib_database.entries:
                     entry = bib_database.entries[0]
-                    entry['ID'] = paper_key_map.get(i, entry['ID']) # Set custom key
+                    # Set the new, robust citekey
+                    entry['ID'] = p.citekey if p.citekey else entry['ID']
                     all_bib_entries.append(entry)
-            except Exception:
+            except Exception as e:
+                print(f"    Warning: Could not parse bibtex for bibkey generation '{p.title}'. Reason: {e}")
                 continue
     
-    final_db = bibtexparser.bibdatabase.BibDatabase()
-    final_db.entries = all_bib_entries
-    
-    writer = bibtexparser.bwriter.BibTexWriter()
-    writer.indent = '    ' # 4-space indentation
-    with open(path, 'w', encoding='utf-8') as bibfile:
-        bibfile.write(writer.write(final_db))
+    if all_bib_entries:
+        final_db = bibtexparser.bibdatabase.BibDatabase()
+        final_db.entries = all_bib_entries
+        
+        writer = bibtexparser.bwriter.BibTexWriter()
+        writer.indent = '    '
+        with open(path, 'w', encoding='utf-8') as bibfile:
+            bibfile.write(writer.write(final_db))
 
     print("BibTeX file generation complete.")

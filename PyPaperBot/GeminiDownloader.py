@@ -11,8 +11,12 @@ def get_agent_action(driver, paper_obj, instruction):
     """
     print(f"    Gemini Agent: {instruction}")
     try:
-        client = genai.Client(api_key=NetInfo.gemini_api_key)
-        
+        # FIX: Use modern genai SDK initialization and call
+        if not NetInfo.gemini_api_key:
+             raise ValueError("Gemini API key not found in NetInfo.")
+        genai.configure(api_key=NetInfo.gemini_api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
         screenshot_base64 = driver.get_screenshot_as_base64()
         screenshot_part = {
             "mime_type": "image/png",
@@ -28,11 +32,7 @@ def get_agent_action(driver, paper_obj, instruction):
         Instruction: "{instruction}"
         """
         
-        # CORRECTED API CALL
-        response = client.models.generate_content(
-            model='gemini-1.5-flash-latest',
-            contents=[prompt, screenshot_part]
-        )
+        response = model.generate_content([prompt, screenshot_part])
         
         cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
         action_json = json.loads(cleaned_response)

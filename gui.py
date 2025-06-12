@@ -173,15 +173,14 @@ def initialize_credentials():
     if not email:
         messagebox.showerror("Credentials Error", "Could not find `email` in credentials.txt")
         return False
-    if not gemini_key:
-        messagebox.showerror("Credentials Error", "Could not find `gemini_api_key` in credentials.txt")
-        return False
+    # A Gemini key is not strictly required to run, so we don't check for it here.
     UnpywallCredentials(email)
     
-    # Ensure the main cache directory exists
     cache_dir = os.path.join(os.getcwd(), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
     
+    # FIX: The Unpaywall cache is re-enabled. Disabling it causes services
+    # to block our IP address for making too many requests (403 Forbidden).
     cache = UnpywallCache(os.path.join(cache_dir, 'unpaywall_cache'))
     Unpywall.init_cache(cache)
     return True

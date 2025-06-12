@@ -1,11 +1,7 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Jun  7 11:59:42 2020
-
-@author: Vito
-"""
+# PyPaperBot/HTMLparsers.py
 from bs4 import BeautifulSoup
 import re
+from urllib.parse import urljoin
 
 
 def schoolarParser(html):
@@ -37,11 +33,10 @@ def schoolarParser(html):
                 except ValueError:
                     continue
 
-                if not authors.strip().endswith('\u2026'):
-                    # There is no ellipsis at the end so we know the full list of authors
-                    authors = authors.replace(', ', ';')
-                else:
-                    authors = None
+                # Keep the author string from scholar, even if truncated.
+                # It will be overwritten by the authoritative one from Crossref later.
+                authors = authors.replace(', ', ';').replace('\u2026', '').strip()
+
                 try:
                     year = int(source_and_year[-4:])
                 except ValueError:
@@ -70,40 +65,46 @@ def isBook(tag):
 
 
 def getSchiHubPDF(html):
-    result = None
     soup = BeautifulSoup(html, "html.parser")
+    iframe = soup.find(id='pdf')
+    if iframe:
+        src = iframe.get("src")
+        if src and not src.startswith('http'):
+            return "https:" + src
+        return src
+    return None
 
-    iframe = soup.find(id='pdf') #scihub logic
-    plugin = soup.find(id='plugin') #scihub logic
-    download_scidb = soup.find("a", text=lambda text: text and "Download" in text, href=re.compile(r"\.pdf$")) #scidb logic
-    embed_scihub = soup.find("embed") #scihub logic
-
-    if iframe is not None:
-        result = iframe.get("src")
-
-    if plugin is not None and result is None:
-        result = plugin.get("src")
-
-    if result is not None and result[0] != "h":
-        result = "https:" + result
-
-    if download_scidb is not None and result is None:
-        result = download_scidb.get("href")
-
-    if embed_scihub is not None and result is None:
-        result = embed_scihub.get("original-url")
-
-    return result
+def get_scidb_pdf_link(html):
+    soup = BeautifulSoup(html, "html.parser")
+    download_link = soup.find("a", href=re.compile(r"downloads.annas-archive.org"))
+    if download_link:
+        return download_link.get("href")
+    return None
 
 
 def SciHubUrls(html):
     result = []
     soup = BeautifulSoup(html, "html.parser")
-
     for ul in soup.findAll("ul"):
         for a in ul.findAll("a"):
             link = a.get("href")
-            if link.startswith("https://sci-hub.") or link.startswith("http://sci-hub."):
+            if link and (link.startswith("https://sci-hub.") or link.startswith("http://sci-hub.")):
                 result.append(link)
-
     return result
+
+def scrape_page_for_pdf_link(html, page_url):
+    """
+    Performs a best-effort scrape of an HTML page to find a link to a PDF.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    # Look for <a> tags with hrefs ending in .pdf, or containing 'download' and 'pdf'
+    for a in soup.find_all('a', href=True):
+        href = a['href'].lower()
+        text = a.text.lower()
+        if href.endswith('.pdf'):
+            # Construct absolute URL if necessary
+            return urljoin(page_url, a['href'])
+        if ('download' in text or 'pdf' in text) and ('.pdf' in href or 'content/pdf' in href):
+            return urljoin(page_url, a['href'])
+    print("    -> Scraper could not find a PDF link on the page.")
+    return None

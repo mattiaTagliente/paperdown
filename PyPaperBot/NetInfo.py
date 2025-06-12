@@ -1,6 +1,7 @@
+# PyPaperBot/NetInfo.py
 class NetInfo:
     SciHub_URL = None
-    SciDB_URL = "https://annas-archive.se/scidb/"
+    SciDB_URL = "https://annas-archive.org/scidb/"
     # More comprehensive headers to mimic a real browser
     HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
@@ -15,4 +16,5 @@ class NetInfo:
         'Sec-Fetch-User': '?1',
         'DNT': '1'
     }
-    SciHub_URLs_repo = "https://sci-hub.41610.org/"
+    SciHub_URLs_repo = "https://sci-hub.41610.org/" # This is now a fallback
+    gemini_api_key = None
