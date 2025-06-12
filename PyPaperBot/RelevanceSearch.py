@@ -2,7 +2,8 @@
 import os
 import re
 from .Scholar import ScholarPapersInfo
-from .Crossref import getPapersInfo
+# The function to save the cache is now imported here
+from .Crossref import getPapersInfo, save_papers_to_cache
 from .Downloader import downloadPapers
 from .Paper import generate_custom_bibtex, generate_citekeys
 from .MetadataFetcher import enrich_paper_with_abstract
@@ -24,13 +25,13 @@ def find_relevant_papers(
     print(f"Topic: {topic}, Date Range: {start_year}-{end_year}")
 
     # --- Phase 1: Find review papers ---
-    print("\n[Phase 1/4] Searching for review papers...")
+    print("\n[Phase 1/5] Searching for review papers...")
     review_query = f"{topic} review"
     top_reviews = ScholarPapersInfo(review_query, range(1, 2), min_date=start_year, max_date=end_year, fetch_metadata=False)[:num_reviews]
     print(f"Selected top {len(top_reviews)} review papers.")
 
     # --- Phase 2: Find non-review papers ---
-    print("\n[Phase 2/4] Searching for non-review papers...")
+    print("\n[Phase 2/5] Searching for non-review papers...")
     all_papers_query = topic
     pages_to_search = 1 + ((num_non_reviews + len(top_reviews)) // 10)
     all_results = ScholarPapersInfo(all_papers_query, range(1, pages_to_search + 1), min_date=start_year, max_date=end_year, fetch_metadata=False)
@@ -44,14 +45,18 @@ def find_relevant_papers(
         return
 
     # --- Phase 3: Fetch full metadata (Authors, DOI, etc.) ---
-    print("\n[Phase 3/4] Fetching full metadata...")
+    print("\n[Phase 3/5] Fetching full metadata from external sources...")
     final_paper_list = getPapersInfo(final_paper_list, s2_api_key)
 
-    # --- Phase 4: Generate Citekeys and Download ---
-    print("\n[Phase 4/4] Generating citekeys and downloading...")
+    # --- Phase 4: Generate Citekeys and Update Cache ---
+    print("\n[Phase 4/5] Generating definitive citekeys...")
     final_paper_list = generate_citekeys(final_paper_list)
+    
+    # NEW STEP: Save the enriched data to the cache using the new, robust citekeys
+    save_papers_to_cache(final_paper_list)
 
-    # Add verbose logging for assigned citekeys
+    # --- Phase 5: Download ---
+    print("\n[Phase 5/5] Downloading papers...")
     print("\n--- Final Citekeys Assigned ---")
     for p in final_paper_list:
         print(f"  - {p.citekey:<25} | {p.title}")

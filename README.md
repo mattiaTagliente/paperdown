@@ -4,23 +4,25 @@ This is a significantly enhanced version of the original PyPaperBot, designed to
 
 This version was developed with a focus on efficiency, reliability, and providing complete metadata for citation management.
 
-![GUI Screenshot](image_c99130.png)
-
 ## Core Features
 
 -   **Dual Search Modes:**
     -   **Standard Search:** Download papers directly using a Google Scholar query or a specific DOI.
     -   **Relevance Search:** Automatically find the most relevant review and non-review papers for a given topic and date range, based on Google Scholar's rankings.
--   **Robust Downloading with AI-Powered Assistance:**
-    -   Prioritizes legal, open-access sources via **Unpaywall**.
-    -   Intelligently scrapes publisher landing pages if a direct PDF link is not available.
-    -   When standard methods fail, it leverages the **Gemini API** to analyze the page content and determine the correct download strategy.
-    -   Searches **arXiv** for pre-prints.
-    -   Falls back to other resources like **SciDB** and **Sci-Hub** if primary methods fail.
+
+-   **Robust, Multi-Source Downloading:**
+    -   The downloader intelligently attempts to find a PDF from the best available sources in the following order: Unpaywall, direct DOI link, arXiv, Anna's Archive, and Sci-Hub.
+    -   For sources protected by strong anti-bot measures (like Sci-Hub), the tool automatically uses a **headless browser instance** to simulate human interaction and secure the download.
+
 -   **Complete Bibliographic Data:**
     -   Automatically generates a `.bib` file for all collected papers.
     -   Creates custom, disambiguated citation keys (e.g., `[SurnameYEARThea]`) for easy reference.
     -   Enriches BibTeX entries by fetching missing abstracts from the **Semantic Scholar API**.
+
+-   **Intelligent Caching:**
+    -   All fetched metadata is cached locally in the `cache/` directory to speed up subsequent runs and reduce network requests.
+    -   The cache uses the robust, generated `citekey` as its primary identifier and is backward-compatible with older cache formats.
+
 -   **User-Friendly Interface:**
     -   A graphical interface built with Tkinter for easy operation.
     -   Remembers your selected download folder between sessions.
@@ -31,7 +33,7 @@ This version was developed with a focus on efficiency, reliability, and providin
 -   Python 3.8+
 -   Git
 -   A handful of Python packages, listed in `requirements.txt`.
--   An email address for the Unpaywall API, an optional API key for Semantic Scholar, and a Gemini API key.
+-   An email address for the Unpaywall API, and optional API keys for Semantic Scholar and Gemini.
 
 ## Setup and Installation
 
@@ -54,7 +56,7 @@ This version was developed with a focus on efficiency, reliability, and providin
     ```
 
 4.  **Create Credentials File:**
-    In the root project folder, create a file named `credentials.txt`. This file **must** have the `[credentials]` header. Add your email, optional Semantic Scholar API key, and your Gemini API key here.
+    In the root project folder, create a file named `credentials.txt`. This file **must** have the `[credentials]` header. Add your email and optional API keys here.
     ```ini
     [credentials]
     email = your_email@provider.com
@@ -80,6 +82,8 @@ This version was developed with a focus on efficiency, reliability, and providin
 4.  **Click Search:**
     The output log will show the script's progress in real-time.
 
-## Acknowledgements
+## Command-Line Interface (CLI)
 
-This project is a heavily modified fork of the original [PyPaperBot by ferru97](https://github.com/ferru97/PyPaperBot). It builds upon its solid foundation by adding new features, a graphical interface, and a more robust, multi-source download strategy.
+For advanced users and automation, the original command-line interface is still available. You can access it by running the `PyPaperBot` module directly. For a full list of commands and options, use the help flag:
+```bash
+python -m PyPaperBot.__main__ --help
